@@ -33,7 +33,7 @@
 </head>
 <body>
 <h1>🎵 LingOrm 音乐盒</h1>
-<div class="hint">NFC 一碰即播 · 安卓多能自动播、苹果点一下即可 · 共 140 首</div>
+<div class="hint">NFC 一碰即播 · 手机浏览器会拦截自动播放，点一下「▶ 播放」即可开始（之后随机/顺序自动连播）· 共 140 首</div>
 <div class="now paused" id="now">
   <div class="disc"></div>
   <div class="nowinfo">
@@ -44,7 +44,7 @@
 <input id="q" placeholder="🔍 搜索歌名 / 歌手…">
 <ul id="list"></ul>
 <div class="cnt">由 WorkBuddy 生成 · 自托管免梯 · 国内外通用</div>
-<div class="ovl" id="ovl" hidden><div class="tip">浏览器拦截了自动播放</div><button id="ovlbtn">▶ 播放</button></div>
+<div class="ovl" id="ovl" hidden><div class="tip">浏览器拦截了自动播放，点一下开始听 ♪</div><button id="ovlbtn">▶ 播放</button></div>
 <script src="songs.js"></script>
 <script>
 /* SONGS array moved to songs.js */
@@ -62,7 +62,9 @@ function play(s){
   const p=au.play();
   if(p&&p.catch) p.catch(()=>{ ovlbtn.textContent='▶ 播放《'+s.t+'》'; ovl.hidden=false; });
 }
-ovlbtn.onclick=()=>{ if(CURRENT) play(CURRENT); };
+function startFromGate(){ if(CURRENT) play(CURRENT); }
+ovlbtn.onclick=(e)=>{e.stopPropagation();startFromGate();};
+ovl.onclick=startFromGate;
 function shuffle(a){a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
 function startQueue(arr){ QUEUE=arr; qi=0; play(QUEUE[0]); }
 function render(arr){
