@@ -24,6 +24,7 @@ const au = document.getElementById('au'),
 const BASE = '';
 let CURRENT = null, QUEUE = [], qi = 0;
 let advancing = false;            // 防止 onended / timeupdate 重复触发续播
+const LOOKAHEAD = 0.5;            // 后台抢先续播提前量（秒）：避免曲间静音掐断后台音频会话
 const pre = document.createElement('audio'); pre.preload = 'auto';
 
 function nextOf(s){
@@ -171,12 +172,21 @@ au.onplay = () => { now.classList.remove('paused'); if('mediaSession' in navigat
 au.onpause = () => { now.classList.add('paused'); if('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused'; };
 au.onended = advance;
 
-/* timeupdate 兜底：某些手机浏览器（尤其 iOS/Safari）onended 不触发或被自动播放策略拦，
-   这里在歌曲临近结束（>= duration-0.05s）时补一刀续播，避免「播完一首就静默停住」 */
+/* timeupdate 双模续播：
+   - 后台(页面不可见 / 息屏 / 切 App)：必须在当前曲结束前约 LOOKAHEAD 秒"抢先"续播下一首，
+     否则两首之间出现静音空隙，移动端会掐断后台音频会话 → 表现就是「后台播完一首就停」。
+     抢先续播让音频会话永不断流，实现真·后台连播（代价是后台时每首末尾被截 LOOKAHEAD 秒，可接受）。
+   - 前台(可见)：不抢拍，等 onended 无缝衔接，保证歌曲完整、零截断。
+   两者都受 advancing 去重保护，不会双切。 */
 au.ontimeupdate = () => {
   if(advancing) return;
-  if(au.duration && isFinite(au.duration) && au.currentTime >= au.duration - 0.05){
-    advance();
+  if(au.duration && isFinite(au.duration)){
+    const remain = au.duration - au.currentTime;
+    if(document.hidden && remain <= LOOKAHEAD){
+      advance();                       // 后台：提前续播，保住后台音频会话
+    } else if(remain <= 0.05){
+      advance();                       // 前台兜底：临近结束补一刀（防个别浏览器 onended 不触发）
+    }
   }
 };
 
