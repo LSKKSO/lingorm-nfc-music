@@ -54,6 +54,22 @@ const BASE='';
 let CURRENT=null;
 let QUEUE=[];
 let qi=0;
+const pre=document.createElement('audio'); pre.preload='auto';
+function nextOf(s){
+  if(QUEUE.length){
+    const idx=QUEUE.indexOf(s);
+    if(idx>=0 && idx<QUEUE.length-1) return QUEUE[idx+1];
+    return null;
+  }
+  const i=SONGS.findIndex(x=>x.f===s.f);
+  if(i>=0 && i<SONGS.length-1) return SONGS[i+1];
+  return null;
+}
+function preloadNext(){
+  const n=nextOf(CURRENT);
+  if(n){ const u=BASE+encodeURIComponent(n.f); if(pre.src!==u){ pre.src=u; try{pre.load();}catch(e){} } }
+  else { try{pre.removeAttribute('src');}catch(e){} }
+}
 function updateMediaSession(s){
   if(!('mediaSession' in navigator)) return;
   try{
@@ -75,7 +91,7 @@ function play(s, auto){
   au.src=BASE+encodeURIComponent(s.f);
   nt.textContent=s.t; now.classList.remove('paused');
   [...list.children].forEach(li=>li.classList.toggle('cur',li.dataset.f===s.f));
-  updateMediaSession(s);
+  updateMediaSession(s); preloadNext();
   if(auto!==false){ const p=au.play(); if(p&&p.catch) p.catch(()=>{ ovlbtn.textContent='▶ 播放《'+s.t+'》'; ovl.hidden=false; }); }
 }
 function advance(){
