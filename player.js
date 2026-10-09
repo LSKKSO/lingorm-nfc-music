@@ -14,42 +14,33 @@ try{
   }
 }catch(e){ SONGS = []; }
 
-const au = document.getElementById('au'),
-      nt = document.getElementById('nt'),
+const nt = document.getElementById('nt'),
       now = document.getElementById('now'),
       list = document.getElementById('list'),
       q = document.getElementById('q'),
       ovl = document.getElementById('ovl'),
-      ovlbtn = document.getElementById('ovlbtn');
+      ovlbtn = document.getElementById('ovlbtn'),
+      cntn = document.getElementById('cntn');
 const BASE = '';
 let CURRENT = null, QUEUE = [], qi = 0;
-let advancing = false;            // 防止 onended / timeupdate 重复触发续播
-const LOOKAHEAD = 0.5;            // 后台抢先续播提前量（秒）：避免曲间静音掐断后台音频会话
-const pre = document.createElement('audio'); pre.preload = 'auto';
 
-function nextOf(s){
-  if(!s) return null;
-  if(QUEUE.length){
-    const idx = QUEUE.indexOf(s);
-    if(idx >= 0 && idx < QUEUE.length - 1) return QUEUE[idx + 1];
-    return null;
-  }
-  const i = SONGS.findIndex(x => x.f === s.f);
-  if(i >= 0 && i < SONGS.length - 1) return SONGS[i + 1];
-  return null;
-}
+/* ── 双元素引擎（后台/息屏连播的关键）──────────────────────────────
+   移动端（尤其 Android / 国产 ROM）在后台或息屏时会节流 timeupdate、
+   并拒绝「脚本在后台发起的 play()」，于是旧版「onended 里 play 下一首」
+   在后台就静默停住。
+   解法：cur 正在响，nxt 在当前曲还在响时就（音量0）预播下一首——
+   这一步在前台发起，后台/息屏也安全；曲终 ended 时只改属性
+   （nxt.currentTime=0 + nxt.volume=1），绝不重新 play()，
+   所以后台/息屏交接稳定不断流，且不剪歌头、不叠音。 */
+const A = document.getElementById('au');
+const B = document.createElement('audio'); B.preload = 'auto';
+document.body.appendChild(B);
+let cur = A, nxt = B, nxtPrepared = false, nextMeta = null;
+const PRESTART = 2;   // timeupdate 兜底：临近结束也确保预播已就绪
 
-/* 预加载下一首：只做下载缓存，不把它的 src 喂给主播放器（iOS 上那样不可靠） */
-function preloadNext(){
-  try{
-    const n = nextOf(CURRENT);
-    if(n){ const u = BASE + encodeURIComponent(n.f); if(pre.src !== u){ pre.src = u; pre.load(); } }
-    else { pre.removeAttribute('src'); }
-  }catch(e){}
-}
-
+function highlight(s){ [].forEach.call(list.children, li => li.classList.toggle('cur', li && li.dataset && li.dataset.f === (s && s.f))); }
 function updateMediaSession(s){
-  if(!('mediaSession' in navigator)) return;
+  if(!('mediaSession' in navigator) || !s) return;
   try{
     navigator.mediaSession.metadata = new MediaMetadata({title:s.t, artist:'LingOrm', album:'NFC 音乐盒'});
     navigator.mediaSession.playbackState = 'playing';
@@ -73,48 +64,94 @@ function getNext(){
   return null;
 }
 
-function play(s, auto){
+/* 在 cur 上播放 s（用户手势 / 前台发起的播放都走这里，后台安全） */
+function realPlay(s, auto){
   if(!s || !s.f) return Promise.resolve();
+  if(nxt && nxt !== cur){ try{ nxt.pause(); }catch(e){} }
+  nxtPrepared = false; nextMeta = null;
   CURRENT = s; ovl.hidden = true;
-  au.src = BASE + encodeURIComponent(s.f);
-  try{ au.load(); }catch(e){}
-  nt.textContent = s.t; now.classList.remove('paused');
-  [].forEach.call(list.children, li => li.classList.toggle('cur', li.dataset.f === s.f));
-  updateMediaSession(s); preloadNext();
+  cur.src = BASE + encodeURIComponent(s.f);
+  try{ cur.load(); }catch(e){}
+  nt.textContent = s.t; now.classList.remove('paused'); highlight(s); updateMediaSession(s);
+  prepareNext();   // 一开播就立刻预播下一首（音量0，前台发起，后台安全）——必须在 play 之前，否则自动播放路径被 return 跳过
   if(auto !== false){
-    const p = au.play();
+    const p = cur.play();
     if(p && p.catch) return p.catch(() => { ovlbtn.textContent = '▶ 播放《' + s.t + '》'; ovl.hidden = false; });
   }
   return Promise.resolve();
 }
 
-/* 续播：核心。被 onended 与 timeupdate 双重触发，靠 advancing 去重 */
-function advance(){
-  if(advancing) return;
+/* 预播下一首：nxt 音量0 播放，ended 交接时再调回音量，绝不剪头 */
+function prepareNext(){
+  if(nxtPrepared || !CURRENT) return;
   const nx = getNext();
-  if(!nx){ now.classList.add('paused'); if('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused'; return; }
-  advancing = true;
-  qi = nx.qi;
-  play(nx.s, true).finally(() => { advancing = false; });
+  if(!nx) return;
+  try{
+    nxt.src = BASE + encodeURIComponent(nx.s.f);
+    nxt.load(); nxt.volume = 0;
+    const p = nxt.play();
+    if(p && p.catch){
+      p.then(() => { nxtPrepared = true; nextMeta = nx; })
+       .catch(() => { nxtPrepared = false; });
+    } else { nxtPrepared = true; nextMeta = nx; }
+  }catch(e){ nxtPrepared = false; }
 }
+
+/* 交接：cur 播完 → 把已预播的 nxt 转正。只改属性、不重新 play，后台安全 */
+function handoff(){
+  if(!nxtPrepared || !nextMeta){            // 没准备好，退化续播（极少走）
+    const nx = getNext();
+    if(nx){ qi = nx.qi; realPlay(nx.s, true); }
+    else { now.classList.add('paused'); if('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused'; }
+    return;
+  }
+  try{ cur.pause(); }catch(e){}
+  try{ nxt.currentTime = 0; }catch(e){}      // 回拨到开头 → 不剪歌头
+  nxt.volume = 1;
+  CURRENT = nextMeta.s; qi = nextMeta.qi;
+  nt.textContent = CURRENT.t; now.classList.remove('paused'); highlight(CURRENT); updateMediaSession(CURRENT);
+  const t = cur; cur = nxt; nxt = t;        // 交换角色，原 nxt 成为新的 cur（正响着）
+  nxtPrepared = false; nextMeta = null;
+  prepareNext();                            // 为新的下一首预播
+}
+
+function onEnded(){ if(this === cur) handoff(); }
+function onTime(){
+  if(this !== cur) return;
+  if(cur.duration && isFinite(cur.duration)){
+    const r = cur.duration - cur.currentTime;
+    if(r <= PRESTART) prepareNext();
+  }
+}
+A.onended = onEnded; B.onended = onEnded;
+A.ontimeupdate = onTime; B.ontimeupdate = onTime;
+A.onplay = () => { now.classList.remove('paused'); if('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing'; };
+B.onplay = () => { now.classList.remove('paused'); if('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing'; };
+A.onpause = () => { if(cur === A && !cur.ended) now.classList.add('paused'); };
+B.onpause = () => { if(cur === B && !cur.ended) now.classList.add('paused'); };
+
 function nextTrack(){
-  let nx = null;
-  if(QUEUE.length){ if(qi < QUEUE.length - 1) nx = {s:QUEUE[qi + 1], qi:qi + 1}; else if(QUEUE.length>1) nx = {s:QUEUE[0], qi:0}; }
-  else { const i = SONGS.findIndex(x => x.f === (CURRENT&&CURRENT.f)); if(i >= 0 && i < SONGS.length - 1) nx = {s:SONGS[i + 1], qi:i + 1}; else if(SONGS.length>1) nx = {s:SONGS[0], qi:0}; }
-  if(nx){ qi = nx.qi; advancing = true; play(nx.s, true).finally(()=>{ advancing = false; }); }
+  const nx = getNext();
+  if(nx){ qi = nx.qi; realPlay(nx.s, true); }
 }
 function prevTrack(){
   let pv = null;
-  if(QUEUE.length){ if(qi > 0) pv = {s:QUEUE[qi - 1], qi:qi - 1}; else if(QUEUE.length>1) pv = {s:QUEUE[QUEUE.length-1], qi:QUEUE.length-1}; }
-  else { const i = SONGS.findIndex(x => x.f === (CURRENT&&CURRENT.f)); if(i > 0) pv = {s:SONGS[i - 1], qi:i - 1}; else if(SONGS.length>1) pv = {s:SONGS[SONGS.length-1], qi:SONGS.length-1}; }
-  if(pv){ qi = pv.qi; advancing = true; play(pv.s, true).finally(()=>{ advancing = false; }); }
+  if(QUEUE.length){
+    if(qi > 0) pv = {s:QUEUE[qi - 1], qi:qi - 1};
+    else if(QUEUE.length > 1) pv = {s:QUEUE[QUEUE.length - 1], qi:QUEUE.length - 1};
+  } else {
+    const i = SONGS.findIndex(x => x.f === (CURRENT && CURRENT.f));
+    if(i > 0) pv = {s:SONGS[i - 1], qi:i - 1};
+    else if(SONGS.length > 1) pv = {s:SONGS[SONGS.length - 1], qi:SONGS.length - 1};
+  }
+  if(pv){ qi = pv.qi; realPlay(pv.s, true); }
 }
 
-function startFromGate(){ if(CURRENT) play(CURRENT); }
+function startFromGate(){ if(CURRENT) realPlay(CURRENT); }
 ovlbtn.onclick = e => { e.stopPropagation(); startFromGate(); };
 ovl.onclick = startFromGate;
 
-/* 洗牌：Math.random() 必须带括号——旧写法漏了括号，会产生 undefined 项把整个列表渲染搞崩 */
+/* 洗牌：Math.random() 必须带括号 */
 function shuffle(a){
   const b = a.slice();
   for(let i = b.length - 1; i > 0; i--){
@@ -126,7 +163,7 @@ function shuffle(a){
 function startQueue(arr){
   QUEUE = arr.filter(Boolean);
   qi = 0;
-  if(QUEUE.length) play(QUEUE[0]);
+  if(QUEUE.length) realPlay(QUEUE[0], true);
 }
 function render(arr){
   list.innerHTML = '';
@@ -136,13 +173,13 @@ function render(arr){
     li.dataset.f = s.f;
     li.innerHTML = '<span class="n">' + (i + 1) + '</span><span class="ti"></span>';
     li.querySelector('.ti').textContent = s.t || s.f;
-    li.onclick = () => { QUEUE = []; play(s); };
+    li.onclick = () => { QUEUE = []; realPlay(s); };
     list.appendChild(li);
   });
 }
 
 const pm = new URLSearchParams(location.search);
-function syncCount(){ const el = document.getElementById('cntn'); if(el) el.textContent = SONGS.length; }
+function syncCount(){ if(cntn) cntn.textContent = SONGS.length; }
 function showErr(msg){ list.innerHTML = '<li style="color:#ff9b9b;cursor:default">' + msg + '</li>'; }
 
 function boot(){
@@ -152,7 +189,7 @@ function boot(){
   if(f){
     const name = decodeURIComponent(f);
     const s = SONGS.find(x => x.f === name) || {f:name, t:name};
-    render(SONGS); QUEUE = []; play(s);
+    render(SONGS); QUEUE = []; realPlay(s, true);
   } else if(pm.get('shuffle')){
     render(SONGS); startQueue(shuffle(SONGS));
   } else if(pm.get('all')){
@@ -168,32 +205,11 @@ q.oninput = () => {
   const k = q.value.trim().toLowerCase();
   render(SONGS.filter(s => (s.t || '').toLowerCase().indexOf(k) >= 0));
 };
-au.onplay = () => { now.classList.remove('paused'); if('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing'; };
-au.onpause = () => { now.classList.add('paused'); if('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused'; };
-au.onended = advance;
-
-/* timeupdate 双模续播：
-   - 后台(页面不可见 / 息屏 / 切 App)：必须在当前曲结束前约 LOOKAHEAD 秒"抢先"续播下一首，
-     否则两首之间出现静音空隙，移动端会掐断后台音频会话 → 表现就是「后台播完一首就停」。
-     抢先续播让音频会话永不断流，实现真·后台连播（代价是后台时每首末尾被截 LOOKAHEAD 秒，可接受）。
-   - 前台(可见)：不抢拍，等 onended 无缝衔接，保证歌曲完整、零截断。
-   两者都受 advancing 去重保护，不会双切。 */
-au.ontimeupdate = () => {
-  if(advancing) return;
-  if(au.duration && isFinite(au.duration)){
-    const remain = au.duration - au.currentTime;
-    if(document.hidden && remain <= LOOKAHEAD){
-      advance();                       // 后台：提前续播，保住后台音频会话
-    } else if(remain <= 0.05){
-      advance();                       // 前台兜底：临近结束补一刀（防个别浏览器 onended 不触发）
-    }
-  }
-};
 
 if('mediaSession' in navigator){
   try{
-    navigator.mediaSession.setActionHandler('play', () => au.play());
-    navigator.mediaSession.setActionHandler('pause', () => au.pause());
+    navigator.mediaSession.setActionHandler('play', () => realPlay(CURRENT, true));
+    navigator.mediaSession.setActionHandler('pause', () => cur.pause());
     navigator.mediaSession.setActionHandler('nexttrack', nextTrack);
     navigator.mediaSession.setActionHandler('previoustrack', prevTrack);
   }catch(e){}
@@ -215,7 +231,6 @@ if('mediaSession' in navigator){
         try{ arr = JSON.parse(m[0]); }catch(e){ return; }
         if(!Array.isArray(arr) || !arr.length) return;
         if(arr.length === SONGS.length && JSON.stringify(arr.map(x=>x.f)) === JSON.stringify(SONGS.map(x=>x.f))) return;
-        /* 用新对象重建歌单；若正在按队列播放，把队列里的歌按文件名重新映射，避免引用失效 */
         if(QUEUE.length && CURRENT){
           const map = {}; arr.forEach(x => map[x.f] = x);
           const newQ = QUEUE.map(x => map[x.f]).filter(Boolean);
