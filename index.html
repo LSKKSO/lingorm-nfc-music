@@ -54,7 +54,6 @@ const BASE='';
 let CURRENT=null;
 let QUEUE=[];
 let qi=0;
-const pre=document.createElement('audio'); pre.preload='auto';
 function updateMediaSession(s){
   if(!('mediaSession' in navigator)) return;
   try{
@@ -62,37 +61,40 @@ function updateMediaSession(s){
     navigator.mediaSession.playbackState='playing';
   }catch(e){}
 }
-function peekNext(){
-  if(QUEUE.length && qi<QUEUE.length-1) return QUEUE[qi+1];
+function getNext(){
+  if(QUEUE.length){
+    if(qi<QUEUE.length-1) return {s:QUEUE[qi+1], qi:qi+1};
+    return null;
+  }
   const i=SONGS.findIndex(x=>x.f===CURRENT.f);
-  if(i>=0 && i<SONGS.length-1) return SONGS[i+1];
+  if(i>=0 && i<SONGS.length-1) return {s:SONGS[i+1], qi:i+1};
   return null;
 }
-function primeNext(){
-  const n=peekNext();
-  if(n){ const u=BASE+encodeURIComponent(n.f); if(pre.src!==u){ pre.src=u; pre.load(); } }
-  else pre.removeAttribute('src');
-}
-function play(s){
+function play(s, auto){
   CURRENT=s; ovl.hidden=true;
   au.src=BASE+encodeURIComponent(s.f);
   nt.textContent=s.t; now.classList.remove('paused');
   [...list.children].forEach(li=>li.classList.toggle('cur',li.dataset.f===s.f));
-  updateMediaSession(s); primeNext();
-  const p=au.play();
-  if(p&&p.catch) p.catch(()=>{ ovlbtn.textContent='▶ 播放《'+s.t+'》'; ovl.hidden=false; });
+  updateMediaSession(s);
+  if(auto!==false){ const p=au.play(); if(p&&p.catch) p.catch(()=>{ ovlbtn.textContent='▶ 播放《'+s.t+'》'; ovl.hidden=false; }); }
 }
 function advance(){
-  const n=peekNext();
-  if(!n){ now.classList.add('paused'); if('mediaSession' in navigator) navigator.mediaSession.playbackState='paused'; return; }
-  if(QUEUE.length && qi<QUEUE.length-1) qi++;
-  CURRENT=n; au.src=pre.src; nt.textContent=n.t;
-  [...list.children].forEach(li=>li.classList.toggle('cur',li.dataset.f===n.f));
-  updateMediaSession(n); primeNext();
-  const p=au.play(); if(p&&p.catch) p.catch(()=>{});
+  const nx=getNext();
+  if(!nx){ now.classList.add('paused'); if('mediaSession' in navigator) navigator.mediaSession.playbackState='paused'; return; }
+  qi=nx.qi; play(nx.s, true);
 }
-function nextTrack(){ if(QUEUE.length && qi<QUEUE.length-1){ qi++; play(QUEUE[qi]); } else { const i=SONGS.findIndex(x=>x.f===CURRENT.f); if(i>=0&&i<SONGS.length-1) play(SONGS[i+1]); } }
-function prevTrack(){ if(QUEUE.length && qi>0){ qi--; play(QUEUE[qi]); } else { const i=SONGS.findIndex(x=>x.f===CURRENT.f); if(i>0) play(SONGS[i-1]); } }
+function nextTrack(){
+  let nx=null;
+  if(QUEUE.length){ if(qi<QUEUE.length-1) nx={s:QUEUE[qi+1],qi:qi+1}; }
+  else { const i=SONGS.findIndex(x=>x.f===CURRENT.f); if(i>=0&&i<SONGS.length-1) nx={s:SONGS[i+1],qi:i+1}; }
+  if(nx){ qi=nx.qi; play(nx.s,true); }
+}
+function prevTrack(){
+  let pv=null;
+  if(QUEUE.length){ if(qi>0) pv={s:QUEUE[qi-1],qi:qi-1}; }
+  else { const i=SONGS.findIndex(x=>x.f===CURRENT.f); if(i>0) pv={s:SONGS[i-1],qi:i-1}; }
+  if(pv){ qi=pv.qi; play(pv.s,true); }
+}
 function startFromGate(){ if(CURRENT) play(CURRENT); }
 ovlbtn.onclick=(e)=>{e.stopPropagation();startFromGate();};
 ovl.onclick=startFromGate;
