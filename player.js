@@ -23,6 +23,7 @@ const au = document.getElementById('au'),
       ovlbtn = document.getElementById('ovlbtn');
 const BASE = '';
 let CURRENT = null, QUEUE = [], qi = 0;
+let advancing = false;            // 防止 onended / timeupdate 重复触发续播
 const pre = document.createElement('audio'); pre.preload = 'auto';
 
 function nextOf(s){
@@ -54,45 +55,58 @@ function updateMediaSession(s){
   }catch(e){}
 }
 
+/* 取下一首：队列/整库播完都自动循环回开头，做到「永不静默停住」 */
 function getNext(){
   if(QUEUE.length){
     if(qi < QUEUE.length - 1) return {s:QUEUE[qi + 1], qi:qi + 1};
+    if(QUEUE.length > 1) return {s:QUEUE[0], qi:0, looped:true};   // 队列循环
     return null;
   }
-  const i = SONGS.findIndex(x => x.f === CURRENT.f);
-  if(i >= 0 && i < SONGS.length - 1) return {s:SONGS[i + 1], qi:i + 1};
+  if(CURRENT && CURRENT.f){
+    const i = SONGS.findIndex(x => x.f === CURRENT.f);
+    if(i >= 0){
+      if(i < SONGS.length - 1) return {s:SONGS[i + 1], qi:i + 1};
+      if(SONGS.length > 1) return {s:SONGS[0], qi:0, looped:true}; // 整库循环
+    }
+  }
   return null;
 }
 
 function play(s, auto){
-  if(!s || !s.f) return;
+  if(!s || !s.f) return Promise.resolve();
   CURRENT = s; ovl.hidden = true;
   au.src = BASE + encodeURIComponent(s.f);
+  try{ au.load(); }catch(e){}
   nt.textContent = s.t; now.classList.remove('paused');
   [].forEach.call(list.children, li => li.classList.toggle('cur', li.dataset.f === s.f));
   updateMediaSession(s); preloadNext();
   if(auto !== false){
     const p = au.play();
-    if(p && p.catch) p.catch(() => { ovlbtn.textContent = '▶ 播放《' + s.t + '》'; ovl.hidden = false; });
+    if(p && p.catch) return p.catch(() => { ovlbtn.textContent = '▶ 播放《' + s.t + '》'; ovl.hidden = false; });
   }
+  return Promise.resolve();
 }
 
+/* 续播：核心。被 onended 与 timeupdate 双重触发，靠 advancing 去重 */
 function advance(){
+  if(advancing) return;
   const nx = getNext();
   if(!nx){ now.classList.add('paused'); if('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused'; return; }
-  qi = nx.qi; play(nx.s, true);
+  advancing = true;
+  qi = nx.qi;
+  play(nx.s, true).finally(() => { advancing = false; });
 }
 function nextTrack(){
   let nx = null;
-  if(QUEUE.length){ if(qi < QUEUE.length - 1) nx = {s:QUEUE[qi + 1], qi:qi + 1}; }
-  else { const i = SONGS.findIndex(x => x.f === CURRENT.f); if(i >= 0 && i < SONGS.length - 1) nx = {s:SONGS[i + 1], qi:i + 1}; }
-  if(nx){ qi = nx.qi; play(nx.s, true); }
+  if(QUEUE.length){ if(qi < QUEUE.length - 1) nx = {s:QUEUE[qi + 1], qi:qi + 1}; else if(QUEUE.length>1) nx = {s:QUEUE[0], qi:0}; }
+  else { const i = SONGS.findIndex(x => x.f === (CURRENT&&CURRENT.f)); if(i >= 0 && i < SONGS.length - 1) nx = {s:SONGS[i + 1], qi:i + 1}; else if(SONGS.length>1) nx = {s:SONGS[0], qi:0}; }
+  if(nx){ qi = nx.qi; advancing = true; play(nx.s, true).finally(()=>{ advancing = false; }); }
 }
 function prevTrack(){
   let pv = null;
-  if(QUEUE.length){ if(qi > 0) pv = {s:QUEUE[qi - 1], qi:qi - 1}; }
-  else { const i = SONGS.findIndex(x => x.f === CURRENT.f); if(i > 0) pv = {s:SONGS[i - 1], qi:i - 1}; }
-  if(pv){ qi = pv.qi; play(pv.s, true); }
+  if(QUEUE.length){ if(qi > 0) pv = {s:QUEUE[qi - 1], qi:qi - 1}; else if(QUEUE.length>1) pv = {s:QUEUE[QUEUE.length-1], qi:QUEUE.length-1}; }
+  else { const i = SONGS.findIndex(x => x.f === (CURRENT&&CURRENT.f)); if(i > 0) pv = {s:SONGS[i - 1], qi:i - 1}; else if(SONGS.length>1) pv = {s:SONGS[SONGS.length-1], qi:SONGS.length-1}; }
+  if(pv){ qi = pv.qi; advancing = true; play(pv.s, true).finally(()=>{ advancing = false; }); }
 }
 
 function startFromGate(){ if(CURRENT) play(CURRENT); }
@@ -156,6 +170,16 @@ q.oninput = () => {
 au.onplay = () => { now.classList.remove('paused'); if('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing'; };
 au.onpause = () => { now.classList.add('paused'); if('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused'; };
 au.onended = advance;
+
+/* timeupdate 兜底：某些手机浏览器（尤其 iOS/Safari）onended 不触发或被自动播放策略拦，
+   这里在歌曲临近结束（>= duration-0.05s）时补一刀续播，避免「播完一首就静默停住」 */
+au.ontimeupdate = () => {
+  if(advancing) return;
+  if(au.duration && isFinite(au.duration) && au.currentTime >= au.duration - 0.05){
+    advance();
+  }
+};
+
 if('mediaSession' in navigator){
   try{
     navigator.mediaSession.setActionHandler('play', () => au.play());
@@ -180,7 +204,13 @@ if('mediaSession' in navigator){
         let arr;
         try{ arr = JSON.parse(m[0]); }catch(e){ return; }
         if(!Array.isArray(arr) || !arr.length) return;
-        if(arr.length === SONGS.length) return;
+        if(arr.length === SONGS.length && JSON.stringify(arr.map(x=>x.f)) === JSON.stringify(SONGS.map(x=>x.f))) return;
+        /* 用新对象重建歌单；若正在按队列播放，把队列里的歌按文件名重新映射，避免引用失效 */
+        if(QUEUE.length && CURRENT){
+          const map = {}; arr.forEach(x => map[x.f] = x);
+          const newQ = QUEUE.map(x => map[x.f]).filter(Boolean);
+          QUEUE = newQ.length ? newQ : arr;
+        }
         SONGS = arr;
         syncCount();
         if(!CURRENT) render(SONGS);
