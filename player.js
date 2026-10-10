@@ -24,6 +24,31 @@ const BASE = '';
 let CURRENT = null, QUEUE = [], qi = 0;
 let mode = 'seq', bag = [];          // 随机模式：从 bag 随机抽取下一首，播完一轮再重洗
 
+/* ── 屏幕常亮（Wake Lock）──────────────────────────────────────────
+   部分国产安卓（如 OriginOS）会在页面进入后台/息屏时掐断网页媒体，
+   导致「播完一首就停」。原生 App 才能让息屏连播，但 NFC 卡受众无法人人装 App。
+   退而求其次：用 Screen Wake Lock 让屏幕保持常亮（不自动锁屏），
+   页面始终在前台 → 媒体不被系统杀 → 连续播放。代价：屏幕亮着（可低亮度）。
+   支持情况：Chrome / Samsung Internet / Firefox 支持；Safari 暂不支持
+   （但 iOS 用户本就支持息屏播放，无需此开关）。 */
+let wakeLock = null, wantWake = true;
+async function acquireWake(){
+  if(!wantWake || !('wakeLock' in navigator)) return;
+  try{ if(!wakeLock) wakeLock = await navigator.wakeLock.request('screen'); }catch(e){}
+}
+function dropWake(){ if(wakeLock){ try{ wakeLock.release(); }catch(e){} wakeLock = null; } }
+function ensureWake(){ if(document.visibilityState === 'visible') acquireWake(); }
+function setupWakeToggle(){
+  const btn = document.getElementById('wlbtn');
+  if(!btn) return;
+  const paint = () => { btn.textContent = wantWake ? '🔆 保持屏幕常亮：开' : '🔅 保持屏幕常亮：关'; btn.classList.toggle('on', wantWake); };
+  btn.onclick = (e) => { e.stopPropagation(); wantWake = !wantWake; paint(); if(wantWake) ensureWake(); else dropWake(); };
+  paint();
+}
+if('wakeLock' in navigator){
+  document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible'){ if(wantWake) acquireWake(); } else { dropWake(); } });
+}
+
 /* ── 双元素引擎（后台/息屏连播的关键）──────────────────────────────
    移动端在后台/息屏时会节流 timeupdate、并拒绝「脚本在后台发起的 play()」，
    于是旧版「onended 里 play 下一首」在后台就静默停住。
@@ -41,7 +66,7 @@ function highlight(s){ [].forEach.call(list.children, li => li.classList.toggle(
 function updateMediaSession(s){
   if(!('mediaSession' in navigator) || !s) return;
   try{
-    navigator.mediaSession.metadata = new MediaMetadata({title:s.t, artist:'LingOrm', album:'NFC 音乐盒'});
+    navigator.mediaSession.metadata = new MediaMetadata({title:s.t, artist:'LingOrm', album:'NFC 音乐盒', artwork:[{src:BASE+'icon-512.png', sizes:'512x512', type:'image/png'}]});
     navigator.mediaSession.playbackState = 'playing';
     updatePositionState();
   }catch(e){}
@@ -95,7 +120,7 @@ function realPlay(s, auto){
   CURRENT = s; ovl.hidden = true;
   cur.src = BASE + encodeURIComponent(s.f);
   try{ cur.load(); }catch(e){}
-  nt.textContent = s.t; now.classList.remove('paused'); highlight(s); updateMediaSession(s);
+  nt.textContent = s.t; now.classList.remove('paused'); highlight(s); updateMediaSession(s); ensureWake();
   prepareNext();   // 一开播就立刻预播下一首（音量0，前台发起，后台安全）——必须在 play 之前，否则自动播放路径被 return 跳过
   if(auto !== false){
     const p = cur.play();
@@ -172,7 +197,7 @@ function prevTrack(){
   if(pv){ qi = pv.qi; realPlay(pv.s, true); }
 }
 
-function startFromGate(){ if(CURRENT) realPlay(CURRENT); }
+function startFromGate(){ ensureWake(); if(CURRENT) realPlay(CURRENT); }
 ovlbtn.onclick = e => { e.stopPropagation(); startFromGate(); };
 ovl.onclick = startFromGate;
 
@@ -216,6 +241,7 @@ function boot(){
   return true;
 }
 if(!boot()) showErr('歌单加载中… 若一直空白请下拉刷新');
+setupWakeToggle();
 
 q.oninput = () => {
   const k = q.value.trim().toLowerCase();
