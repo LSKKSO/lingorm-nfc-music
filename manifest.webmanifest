@@ -1,0 +1,17 @@
+{
+  "name": "LingOrm 音乐盒 · NFC 一碰播放",
+  "short_name": "LingOrm",
+  "description": "LingOrm 粉丝音乐，NFC 一碰即播，自托管免梯",
+  "lang": "zh-CN",
+  "start_url": "?shuffle=1",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0e0e12",
+  "theme_color": "#0e0e12",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
