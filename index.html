@@ -6,6 +6,9 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
+<meta name="theme-color" content="#0e0e12">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
 <title>LingOrm 音乐盒 · NFC 一碰播放</title>
 <style>
   :root{--bg:#0e0e12;--card:#1a1a22;--accent:#e63946;--txt:#f5f5f7;--sub:#9aa0aa}
@@ -57,6 +60,16 @@
     s.src='player.js?ts='+Date.now();
     document.body.appendChild(s);
   })();
+</script>
+<script>
+  /* 注册 Service Worker —— 让站点可被「添加到主屏幕」安装为独立 PWA。
+     从主屏幕图标启动（standalone）后，系统把它当独立应用任务，后台/息屏媒体存活率远高于浏览器标签页。
+     注意：GitHub Pages 走 https，SW 只在安全上下文注册；注册失败静默忽略，不影响网页播放。 */
+  if('serviceWorker' in navigator){
+    window.addEventListener('load', function(){
+      navigator.serviceWorker.register('sw.js').catch(function(){/* ignore */});
+    });
+  }
 </script>
 <noscript style="color:#ff9b9b">请开启 JavaScript 后访问。</noscript>
 </body>
